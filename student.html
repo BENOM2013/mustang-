@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>O'quvchi Portali — Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
+</head>
+<body class="bg-slate-100 flex items-center justify-center min-h-screen p-4">
+    <div class="bg-white p-6 md:p-8 rounded-2xl shadow-xl w-full max-w-lg">
+        
+        <!-- 1. Kirish Formasi -->
+        <div id="loginForm" class="space-y-4">
+            <h2 class="text-2xl font-bold text-gray-800 text-center">Testga Qo'shilish</h2>
+            <p class="text-gray-500 text-sm text-center">Ism-familiyangiz va admin bergan test kodini kiriting</p>
+            
+            <div class="space-y-3 pt-2">
+                <input type="text" id="studentName" placeholder="Ism va Familiyangiz" class="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none">
+                <input type="text" id="testCode" placeholder="6 xonali Test Kodi" class="w-full border p-3 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none tracking-widest font-bold text-center">
+                <button onclick="joinTest()" class="w-full bg-blue-600 text-white py-3 rounded-lg font-bold hover:bg-blue-700 transition shadow-md">
+                    So'rov Yuborish
+                </button>
+            </div>
+        </div>
+
+        <!-- 2. Kutish Zali (Admin tasdig'ini kutish) -->
+        <div id="waitBox" class="hidden text-center py-10 space-y-4">
+            <div class="inline-block animate-spin rounded-full h-10 w-10 border-4 border-blue-500 border-t-transparent"></div>
+            <h3 class="text-xl font-bold text-amber-600">Admin tasdiqlashini kuting...</h3>
+            <p class="text-gray-400 text-sm">Admin sizni ruxsat berishi bilan test avtomatik ochiladi.</p>
+        </div>
+
+        <!-- 3. Test Maydoni -->
+        <div id="testArea" class="hidden space-y-6">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 id="testTopicTitle" class="font-bold text-lg text-gray-800">Mavzu: ---</h3>
+                <div id="timerBox" class="bg-red-100 text-red-600 font-bold px-3 py-1 rounded-lg text-sm">
+                    ⏱ <span id="timeLeft">00:00</span>
+                </div>
+            </div>
+
+            <!-- Savol va variantlar -->
+            <div id="questionContainer" class="space-y-4">
+                <!-- Dinamik savollar chiqadi -->
+            </div>
+
+            <button onclick="submitTest()" class="w-full bg-emerald-600 text-white py-3 rounded-lg font-bold hover:bg-emerald-700 transition shadow-lg">
+                Testni Yakunlash va Topshirish
+            </button>
+        </div>
+
+        <!-- 4. Natija Ekrani -->
+        <div id="resultBox" class="hidden text-center py-8 space-y-4">
+            <div class="text-5xl">🎉</div>
+            <h2 class="text-2xl font-bold text-gray-800">Test Yakunlandi!</h2>
+            <p class="text-gray-600">Sizning natijangiz:</p>
+            <div id="finalScoreText" class="text-4xl font-extrabold text-emerald-600">0%</div>
+            <p id="detailedScore" class="text-sm text-gray-500"></p>
+        </div>
+
+    </div>
+
+    <script>
+        // O'zingizning Firebase Config kodingizni shu yerga kiriting:
+      const firebaseConfig = {
+  apiKey: "AIzaSyDQB6UfKW_obdCIVEfKVf-tvFMXSzV7n88",
+  authDomain: "aitestplatform-9b120.firebaseapp.com",
+  databaseURL: "https://aitestplatform-9b120-default-rtdb.firebaseio.com",
+  projectId: "aitestplatform-9b120",
+  storageBucket: "aitestplatform-9b120.firebasestorage.app",
+  messagingSenderId: "480896041441",
+  appId: "1:480896041441:web:cf1ca096efb32a233112a0",
+  measurementId: "G-7KMQ28KM1M"
+};
+
+        firebase.initializeApp(firebaseConfig);
+        const db = firebase.database();
+
+        let myId = 'student_' + Date.now();
+        let code = "";
+        let name = "";
+        let testData = null;
+        let userAnswers = {};
+        let timerInterval = null;
+
+        function joinTest() {
+            name = document.getElementById('studentName').value.trim();
+            code = document.getElementById('testCode').value.trim();
+
+            if (!name || !code) {
+                alert("Iltimos, ism va test kodini to'liq kiriting!");
+                return;
+            }
+
+            // Test mavjudligini tekshirish
+            db.ref('tests/' + code).once('value').then(snapshot => {
+                if (!snapshot.exists()) {
+                    alert("Bunday kodli test topilmadi!");
+                    return;
+                }
+
+                testData = snapshot.val();
+
+                // So'rov yuborish
+                db.ref(`requests/${code}/${myId}`).set({
+                    name: name,
+                    approved: false
+                });
+
+                document.getElementById('loginForm').classList.add('hidden');
+                document.getElementById('waitBox').classList.remove('hidden');
+
+                // Admin tasdig'ini kuzatish
+                db.ref(`requests/${code}/${myId}/approved`).on('value', snap => {
+                    if (snap.val() === true) {
+                        startTestSession();
+                    }
+                });
+            });
+        }
+
+        function startTestSession() {
+            document.getElementById('waitBox').classList.add('hidden');
+            document.getElementById('testArea').classList.remove('hidden');
+
+            document.getElementById('testTopicTitle').innerText = "Mavzu: " + testData.topic;
+
+            // Savol va variantlarni chiqarish
+            const container = document.getElementById('questionContainer');
+            container.innerHTML = "";
+
+            testData.questions.forEach((q, index) => {
+                container.innerHTML += `
+                    <div class="space-y-2 bg-slate-50 p-4 rounded-xl border">
+                        <p class="font-semibold text-gray-700">${index + 1}. ${q.question}</p>
+                        <div class="space-y-2 pt-1">
+                            <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 transition">
+                                <input type="radio" name="q_${q.id}" value="A" onchange="saveAnswer(${q.id}, 'A')" class="w-4 h-4 text-blue-600">
+                                <span class="text-sm text-gray-700">A) ${q.options.A}</span>
+                            </label>
+                            <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 transition">
+                                <input type="radio" name="q_${q.id}" value="B" onchange="saveAnswer(${q.id}, 'B')" class="w-4 h-4 text-blue-600">
+                                <span class="text-sm text-gray-700">B) ${q.options.B}</span>
+                            </label>
+                            <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 transition">
+                                <input type="radio" name="q_${q.id}" value="C" onchange="saveAnswer(${q.id}, 'C')" class="w-4 h-4 text-blue-600">
+                                <span class="text-sm text-gray-700">C) ${q.options.C}</span>
+                            </label>
+                            <label class="flex items-center space-x-3 p-2 bg-white rounded-lg border cursor-pointer hover:bg-blue-50 transition">
+                                <input type="radio" name="q_${q.id}" value="D" onchange="saveAnswer(${q.id}, 'D')" class="w-4 h-4 text-blue-600">
+                                <span class="text-sm text-gray-700">D) ${q.options.D}</span>
+                            </label>
+                        </div>
+                    </div>
+                `;
+            });
+
+            // Vaqtni boshlash (Timer)
+            startTimer(testData.time * 60);
+        }
+
+        function saveAnswer(qId, option) {
+            userAnswers[qId] = option;
+        }
+
+        function startTimer(duration) {
+            let timer = duration, minutes, seconds;
+            timerInterval = setInterval(() => {
+                minutes = parseInt(timer / 60, 10);
+                seconds = parseInt(timer % 60, 10);
+
+                minutes = minutes < 10 ? "0" + minutes : minutes;
+                seconds = seconds < 10 ? "0" + seconds : seconds;
+
+                document.getElementById('timeLeft').textContent = minutes + ":" + seconds;
+
+                if (--timer < 0) {
+                    clearInterval(timerInterval);
+                    alert("Vaqt tugadi!");
+                    submitTest();
+                }
+            }, 1000);
+        }
+
+        function submitTest() {
+            if (timerInterval) clearInterval(timerInterval);
+
+            let correctCount = 0;
+            let totalQuestions = testData.questions.length;
+
+            testData.questions.forEach(q => {
+                if (userAnswers[q.id] && userAnswers[q.id] === q.correct) {
+                    correctCount++;
+                }
+            });
+
+            let scorePercent = Math.round((correctCount / totalQuestions) * 100);
+
+            // Natijani Firebase bazasiga yuborish (Jonli reyting uchun)
+            db.ref(`results/${code}/${myId}`).set({
+                name: name,
+                correctCount: correctCount,
+                totalQuestions: totalQuestions,
+                score: scorePercent
+            }).then(() => {
+                document.getElementById('testArea').classList.add('hidden');
+                document.getElementById('resultBox').classList.remove('hidden');
+
+                document.getElementById('finalScoreText').innerText = scorePercent + "%";
+                document.getElementById('detailedScore').innerText = `Siz ${totalQuestions} ta savoldan ${correctCount} tasiga to'g'ri javob berdingiz.`;
+            });
+        }
+    </script>
+</body>
+</html>
